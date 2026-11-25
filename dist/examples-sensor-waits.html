@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="A Commands v3 field guide with worked Java examples for FRC students who know Commands v2."><title>Sensor waits and retries | Commands v3 Field Guide</title><link rel="stylesheet" href="style.css"></head><body><a class="skip" href="#main">Skip to content</a><header><div class="frame"><a class="brand" href="index.html">Commands v3 <span>Field Guide</span></a><nav class="site-nav" aria-label="Guide"><a href="coroutines.html">Learn</a><a href="changes.html">Migration</a><a href="examples.html" aria-current="location">Examples</a><a href="reference.html">v2 lookup</a><a href="v3-reference.html">v3 lookup</a></nav></div></header><main class="frame examples-frame" id="main" tabindex="-1"><div class="hero"><p class="section"><a href="examples.html">All examples</a></p><h1>Sensor waits and retries</h1><p class="intro">Use a sensor to finish an action, set a time limit, and decide whether to try again.</p></div><div class="reading-layout example-reading-layout"><nav class="contents" aria-labelledby="contents-title"><div id="contents-title">On this page</div><ul><li><a href="#collect-a-game-piece-with-a-time-limit">Collect a game piece with a time limit</a></li><li><a href="#retry-a-pickup-and-choose-a-route">Retry a pickup and choose a route</a></li></ul></nav><article class="examples-sensor-waits"><p>For the basic pattern, see <a href="intake.html#translate-the-intent">stop the intake after a sensor wait</a>. To time out an existing child command, see <a href="ownership.html#race-a-sensor-against-a-timeout">race a sensor against a timer</a>.</p>
+<h2 id="collect-a-game-piece-with-a-time-limit">Collect a game piece with a time limit</h2>
+<p><strong>Problem.</strong> Autonomous needs to continue if the sensor stays clear, and you want to record that collection timed out.</p>
+<p><strong>Where this goes.</strong> Put this method in <code>PracticeIntake</code> from the first lesson. Add a <code>reportIntakeTimeout()</code> method on that class that records a timeout in your robot’s log or dashboard.</p>
+<div class="examples"><figure><figcaption>Commands v3</figcaption><pre tabindex="0"><code>Command collectWithTimeLimit() {
+  return this.run(
+          coroutine -&gt; {
+            setRoller(0.6);
+            var result =
+                coroutine.waitUntil(this::hasGamePiece, Seconds.of(2.0));
+            if (result.timedOut()) {
+              reportIntakeTimeout();
+            }
+          })
+      .whenExited(this::stop)
+      .named(&quot;Collect with time limit&quot;);
+}</code></pre></figure></div>
+<p>Import <code>Seconds</code> as a static member of <code>org.wpilib.units.Units</code>. A successful sensor read skips the report. A timeout runs the report. All exit paths call <code>stop()</code> through <code>whenExited</code>.</p>
+<div class="highlight highlight-idea"><p class="highlight-label">Key idea</p><p>A timed <code>waitUntil</code> returns a result the same command can act on. If another command interrupts the intake while it waits, the body never reaches the timeout report.</p></div>
+<p>Test with the sensor already active, with the sensor going active during the wait, and with the sensor staying clear until timeout. In the first case, the code still calls <code>setRoller(0.6)</code> before checking the sensor, and the wait returns immediately. If collection should leave the roller alone when it starts with a piece, check the sensor before requesting roller output. Also cancel during the wait and confirm the roller stops without reporting a timeout.</p>
+<p><a href="intake.html#translate-the-intent">See the intake class and its helper methods</a></p>
+<div class="highlight highlight-docs"><p class="highlight-label">WPILib docs</p><ul><li><a href="https://docs.wpilib.org/en/latest/docs/software/commandbased/commands-v3/creating-commands.html#timeouts-and-waitresult" class="wpilib-link" target="_blank" rel="noopener">Timeouts and WaitResult <span class="external-link-icon" aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a></li></ul></div>
+<h2 id="retry-a-pickup-and-choose-a-route">Retry a pickup and choose a route</h2>
+<p><strong>Problem.</strong> Try to collect a game piece. If the first attempt times out, move to a second pickup position and try once more. Drive to score if you have a piece. Drive to a safe position if both attempts end with the sensor clear.</p>
+<p><strong>Where this goes.</strong> Put <code>collectThenChooseRoute</code> in your autonomous or shared-actions class. It uses the <a href="#collect-a-game-piece-with-a-time-limit">timed intake command</a>. Make the intake’s read-only <code>hasGamePiece()</code> method accessible to this class. Each drive method returns a command that requires only drive and finishes when it reaches its destination. Each intake attempt requires only the intake.</p>
+<div class="examples"><figure><figcaption>Commands v3</figcaption><pre tabindex="0"><code>Command collectThenChooseRoute(Drive drive, PracticeIntake intake) {
+  return Command.noRequirements(
+          coroutine -&gt; {
+            boolean hasPiece = intake.hasGamePiece();
+            for (int attempt = 1; attempt &lt;= 2 &amp;&amp; !hasPiece; attempt++) {
+              coroutine.await(intake.collectWithTimeLimit());
+              hasPiece = intake.hasGamePiece();
+              if (!hasPiece &amp;&amp; attempt == 1) {
+                coroutine.await(drive.moveToSecondPickup());
+              }
+            }
+
+            if (hasPiece) {
+              coroutine.await(drive.moveToScoringPosition());
+            } else {
+              coroutine.await(drive.moveToSafePosition());
+            }
+          })
+      .named(&quot;Collect then choose a route&quot;);
+}</code></pre></figure></div>
+<table><thead><tr><th scope="col">Java in the command body</th><th scope="col">What it decides</th></tr></thead><tbody><tr><th scope="row"><code>boolean hasPiece</code></th><td>Keeps the latest sensor reading for this run.</td></tr><tr><th scope="row"><code>for</code></th><td>Allows at most two collection attempts. A piece already present skips collection.</td></tr><tr><th scope="row"><code>if (!hasPiece &amp;&amp; attempt == 1)</code></th><td>Drives to the second pickup only after an unsuccessful first attempt.</td></tr><tr><th scope="row"><code>if (hasPiece) ... else ...</code></th><td>Chooses the scoring or fallback route using the latest reading.</td></tr></tbody></table>
+<p>In v2 you could assemble a sequence with conditional commands and lay out each attempt as a separate stage. Here the sensor read and retry loop live inside the lambda passed to <code>noRequirements</code>. That puts both in the scheduled run. Each <code>await</code> pauses the parent while the scheduler runs the child, preserving <code>attempt</code> and <code>hasPiece</code> until the body resumes. When that child finishes, it releases its requirement. If the parent is canceled during a pickup, the active child is canceled and the routine skips the remaining Java statements. <a href="ownership.html">See how requirements change during a routine</a>.</p><p class="example-back"><a href="examples.html">Browse all examples</a></p></article></div></main><footer><div class="frame">FRC Java · WPILib 2027 Alpha 8</div></footer></body></html>

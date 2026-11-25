@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="A Commands v3 field guide with worked Java examples for FRC students who know Commands v2."><title>Coordinate mechanisms | Commands v3 Field Guide</title><link rel="stylesheet" href="style.css"></head><body><a class="skip" href="#main">Skip to content</a><header><div class="frame"><a class="brand" href="index.html">Commands v3 <span>Field Guide</span></a><nav class="site-nav" aria-label="Guide"><a href="coroutines.html" aria-current="location">Learn</a><a href="changes.html">Migration</a><a href="examples.html">Examples</a><a href="reference.html">v2 lookup</a><a href="v3-reference.html">v3 lookup</a></nav></div></header><main class="frame" id="main" tabindex="-1"><div class="hero"><p class="section">Lesson 3 of 3</p><h1>Coordinate mechanisms</h1><p class="intro">Choose how to put commands together by asking what must finish before the next step and which mechanisms the routine must reserve along the way.</p></div><nav class="lesson-nav" aria-label="Learning path"><ol><li><a href="coroutines.html">1. Run a coroutine</a></li><li><a href="intake.html">2. Translate an intake command</a></li><li><a href="ownership.html" aria-current="page">3. Coordinate mechanisms</a></li></ol></nav><div class="reading-layout"><nav class="contents" aria-labelledby="contents-title"><div id="contents-title">On this page</div><ul><li><a href="#choose-a-group-or-a-coroutine">Choose a group or a coroutine</a></li><li><a href="#move-the-drivetrain-then-position-the-elevator">Move the drivetrain, then position the elevator</a></li><li><a href="#prepare-two-independent-mechanisms-together">Prepare two independent mechanisms together</a></li><li><a href="#use-a-group-inside-a-coroutine">Use a group inside a coroutine</a></li><li><a href="#race-a-sensor-against-a-timeout">Race a sensor against a timeout</a></li><li><a href="#start-a-child-and-keep-going-with-fork">Start a child and keep going with fork</a></li></ul></nav><article class="ownership"><h2 id="choose-a-group-or-a-coroutine">Choose a group or a coroutine</h2>
+<p>Commands v3 kept the part of v2’s command-building language that describes simple groups. If you already read <code>Commands.sequence(a, b)</code> as “run a, then b,” you can read a v3 sequence the same way. Coroutines add a way to express the routine in Java when it needs to make decisions or change which mechanisms it reserves.</p>
+<table><thead><tr><th scope="col">What you want</th><th scope="col">Familiar v2 form</th><th scope="col">v3 group builder</th></tr></thead><tbody><tr><th scope="row">Run stages in order</th><td><code>Commands.sequence(a, b)</code> or <code>a.andThen(b)</code></td><td><code>Command.sequence(a, b)</code> or <code>a.andThen(b)</code> gives a <code>SequentialGroupBuilder</code>.</td></tr><tr><th scope="row">Start together and wait for both</th><td><code>Commands.parallel(a, b)</code> or <code>a.alongWith(b)</code></td><td><code>Command.parallel(a, b)</code> or <code>a.alongWith(b)</code> gives a <code>ParallelGroupBuilder</code>.</td></tr><tr><th scope="row">Start together and finish when the first finishes</th><td><code>Commands.race(a, b)</code> or <code>a.raceWith(b)</code></td><td><code>Command.race(a, b)</code> or <code>a.raceWith(b)</code> gives a <code>ParallelGroupBuilder</code> with race behavior.</td></tr></tbody></table>
+<p>Finish the builder with <code>.named(...)</code> to get a command. A v3 <code>ParallelGroupBuilder</code> can also designate which children must finish, such as a timer in the <a href="examples-command-groups.html#keep-the-drivetrain-stopped-during-an-autonomous-pause">autonomous pause example</a>.</p>
+<div class="highlight highlight-idea"><p class="highlight-label">Key idea</p><p>Make two decisions when you compose a routine. Choose what must finish before the next step, and choose which mechanisms must stay reserved between steps.</p></div>
+<p>A fixed group lists actions and reserves all of its children’s requirements for the life of the group. That is useful when a separate command taking over an idle mechanism would disrupt the routine. Check that every mechanism has the output you intend while it is reserved.</p>
+<p>A coroutine helps when the next action depends on a sensor, a timeout, or a retry count. It also helps with a fixed list of steps if only the active child should reserve its mechanism. A parent with no requirements can <code>await</code> each child and let it release its mechanism when it finishes. Decide whether you want a conflict to be checked up front against the whole group or later when a particular child is reached.</p>
+<p><a href="#move-the-drivetrain-then-position-the-elevator">Compare the same two stages below</a> · <a href="#use-a-group-inside-a-coroutine">Use both styles in one routine</a></p>
+<div class="highlight highlight-docs"><p class="highlight-label">WPILib docs</p><ul><li><a href="https://docs.wpilib.org/en/latest/docs/software/commandbased/commands-v3/migration-guide.html#command-groups-and-coroutine-composition" class="wpilib-link" target="_blank" rel="noopener">Command Groups and Coroutine Composition <span class="external-link-icon" aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a></li></ul></div>
+<h2 id="move-the-drivetrain-then-position-the-elevator">Move the drivetrain, then position the elevator</h2>
+<p>Suppose a routine drives to a pickup marker and then lowers the elevator to pickup height. Put these factories in your autonomous or shared-actions class. They receive your existing <code>Drive</code> and <code>Elevator</code> objects. Both implement <code>Mechanism</code>.</p>
+<ul><li><code>drive.moveToPickupMarker()</code> returns a command that requires drive, finishes when aligned, and stops drive when it ends.</li><li><code>elevator.moveToPickupHeight()</code> returns a command that requires the elevator and finishes when the elevator reaches the requested height. The factory creates the command. The action happens when the scheduler runs it.</li></ul>
+<div class="examples"><figure><figcaption>v3 sequence</figcaption><pre tabindex="0"><code>Command pickupWithReservedMechanisms(Drive drive, Elevator elevator) {
+  return Command.sequence(
+          drive.moveToPickupMarker(),
+          elevator.moveToPickupHeight())
+      .named(&quot;Pickup setup with reserved mechanisms&quot;);
+}</code></pre></figure><figure><figcaption>v3 coroutine</figcaption><pre tabindex="0"><code>Command pickupWithChildRequirements(Drive drive, Elevator elevator) {
+  return Command.noRequirements(
+          coroutine -&gt; {
+            coroutine.await(drive.moveToPickupMarker());
+            coroutine.await(elevator.moveToPickupHeight());
+          })
+      .named(&quot;Pickup setup with child requirements&quot;);
+}</code></pre></figure></div>
+<p>Both versions drive first and then move the elevator. The calls to the child factories in <code>Command.sequence(...)</code> happen when you build the routine. The calls in the coroutine version sit inside the lambda. The first factory runs when that body starts, and the second runs when the body resumes after the first <code>await</code>. The timeline below shows when other commands can use each mechanism.</p>
+<p><strong>The parent coordinates the work.</strong> The coroutine uses <code>Command.noRequirements(...)</code> because the parent leaves the hardware actions to the children. Each <code>await</code> starts a child that has its own requirement. Pausing never releases a requirement declared on the parent itself. A requirement lasts until the command that declared it ends.</p>
+<table><thead><tr><th scope="col">Stage</th><th scope="col">Sequence group</th><th scope="col">Coroutine with child requirements</th></tr></thead><tbody><tr><th scope="row">Driving to the pickup marker</th><td>Group reserves drive and elevator.</td><td>Drive child requires drive. Elevator is available.</td></tr><tr><th scope="row">Moving the elevator</th><td>Group still reserves drive and elevator.</td><td>Elevator child requires elevator. Drive is available again.</td></tr><tr><th scope="row">Routine ends</th><td>Group releases both mechanisms.</td><td>The final child releases the elevator when it ends. The parent reserves neither mechanism.</td></tr></tbody></table>
+<p><strong>Decide what can run during each stage.</strong> If the chassis must keep its position while the elevator moves, reserve drive across both stages and make sure your drive code requests the intended hold or stop. A requirement alone sends no motor output. If a separate command can safely control drive during the elevator move, the coroutine makes drive available when the drive child finishes.</p>
+<p><strong>Decide what happens on cancellation.</strong> If the parent is canceled during the drive stage, its drive child is canceled and the elevator stage never starts. Put motor cleanup in the child’s <code>whenExited</code>. With the default Alpha 8 settings, the parent is canceled if a child cannot start. For example, a higher-priority command might already control the elevator.</p>
+<h2 id="prepare-two-independent-mechanisms-together">Prepare two independent mechanisms together</h2>
+<p>Use <code>awaitAll</code> when two actions can happen at the same time and both need to finish. Here <code>Intake.deploy()</code> requires the intake and finishes when it is down. <code>StatusLights.showCollectingForTwoSeconds()</code> requires the lights, shows a collecting pattern for two seconds, and restores the usual pattern through <code>whenExited</code>. Both are command factories on their own mechanism classes.</p>
+<div class="examples"><figure><figcaption>v3 coroutine</figcaption><pre tabindex="0"><code>Command prepareToCollect(Intake intake, StatusLights lights) {
+  return Command.noRequirements(
+          coroutine -&gt; {
+            coroutine.awaitAll(
+                intake.deploy(),
+                lights.showCollectingForTwoSeconds());
+          })
+      .named(&quot;Prepare to collect&quot;);
+}</code></pre></figure></div>
+<p>If the intake finishes first, it becomes available while the lights are still running. The parent waits for both children before it returns. A <code>Command.parallel(...)</code> group also waits for both and reserves both mechanisms until the group finishes.</p>
+<div class="highlight highlight-docs"><p class="highlight-label">WPILib docs</p><ul><li><a href="https://docs.wpilib.org/en/latest/docs/software/commandbased/commands-v3/migration-guide.html#parallel-work" class="wpilib-link" target="_blank" rel="noopener">Parallel Work <span class="external-link-icon" aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a></li></ul></div>
+<h2 id="use-a-group-inside-a-coroutine">Use a group inside a coroutine</h2>
+<p>A routine can use a group for one stage and Java for the decision that follows. Put this example in a shared-actions or autonomous class. Here <code>Intake</code> provides <code>deploy()</code>, a read-only <code>hasGamePiece()</code>, and the <a href="examples-sensor-waits.html#collect-a-game-piece-with-a-time-limit">timed collection command</a>. <code>StatusLights</code> uses the same two-second display command from the preceding example.</p>
+<div class="examples"><figure><figcaption>Commands v3</figcaption><pre tabindex="0"><code>Command prepareThenCollect(Intake intake, StatusLights lights) {
+  return Command.noRequirements(
+          coroutine -&gt; {
+            Command prepare = intake.deploy()
+                .alongWith(lights.showCollectingForTwoSeconds())
+                .named(&quot;Deploy and show collecting pattern&quot;);
+
+            coroutine.await(prepare);
+            if (!intake.hasGamePiece()) {
+              coroutine.await(intake.collectWithTimeLimit());
+            }
+          })
+      .named(&quot;Prepare then collect if needed&quot;);
+}</code></pre></figure></div>
+<p>The group says “deploy and show the pattern, and wait for both.” During that stage it reserves intake and lights. When the group finishes, it releases both. Java then reads the current sensor value. If collection is needed, the collection child takes the intake again and the lights stay available. The parent itself has no requirements.</p>
+<p>If you wanted the lights to become available as soon as their command ends, even while deployment is still running, you could use <code>awaitAll</code> for the preparation stage instead. Both approaches wait for the same two actions to finish. Their requirements are released at different points.</p>
+<h2 id="race-a-sensor-against-a-timeout">Race a sensor against a timeout</h2>
+<p>Run an intake until its sensor detects a game piece or two seconds pass. Both versions use <code>PracticeIntake.collectUntilDetected()</code> from the first translation. That child owns the intake and stops the roller through <code>whenExited</code>. The timer owns no mechanisms. Import <code>Seconds</code> as a static member of <code>org.wpilib.units.Units</code>.</p>
+<div class="examples"><figure><figcaption>v3 race group</figcaption><pre tabindex="0"><code>Command collectWithRace(PracticeIntake intake) {
+  Command timeout = Command.waitFor(Seconds.of(2.0)).named(&quot;Collection timer&quot;);
+  return Command.race(intake.collectUntilDetected(), timeout)
+      .named(&quot;Collect until detected or timed out&quot;);
+}</code></pre></figure><figure><figcaption>v3 coroutine</figcaption><pre tabindex="0"><code>Command collectWithAwaitAny(PracticeIntake intake) {
+  return Command.noRequirements(
+          coroutine -&gt; {
+            Command timeout =
+                Command.waitFor(Seconds.of(2.0)).named(&quot;Collection timer&quot;);
+            coroutine.awaitAny(intake.collectUntilDetected(), timeout);
+          })
+      .named(&quot;Collect until detected or timed out&quot;);
+}</code></pre></figure></div>
+<p>If the sensor detects a piece first, the collection command finishes and the timer is canceled. If the timer finishes first, collection is canceled and its exit action stops the roller. <code>Command.race(...)</code> is the v3 group form of v2 <code>Commands.race(...)</code>. Use <code>awaitAny(...)</code> when the race is a step in a longer coroutine. The parent can continue after the race while the finished intake child releases the intake. Give concurrent children separate requirements.</p>
+<p>If later code cares whether a piece was detected, it can read the sensor after the race. The <code>ForkResult</code> returned by <code>awaitAny</code> describes whether the children could be started. For a single sensor wait with a timeout, the <a href="examples-sensor-waits.html#collect-a-game-piece-with-a-time-limit">timed intake example</a> shows how to use the wait’s explicit timeout result.</p>
+<div class="highlight highlight-docs"><p class="highlight-label">WPILib docs</p><ul><li><a href="https://docs.wpilib.org/en/latest/docs/software/commandbased/commands-v3/migration-guide.html#race-work" class="wpilib-link" target="_blank" rel="noopener">Race Work <span class="external-link-icon" aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a></li></ul></div>
+<h2 id="start-a-child-and-keep-going-with-fork">Start a child and keep going with fork</h2>
+<div class="highlight highlight-warning"><p class="highlight-label">Watch for</p><p>Children run within the parent’s lifetime. If the parent calls <code>fork()</code> and immediately returns, the scheduler cancels any child that is still running.</p></div>
+<p>Use <code>fork</code> when an action should start now and the parent has other work to do before it needs to wait. Suppose the robot should display a moving light pattern for the duration of a drive to the pickup marker. <code>lights.showMoving()</code> returns a command that requires the lights, applies the pattern, and uses <code>park()</code> to stay active until canceled. Its <code>whenExited</code> restores the normal pattern. The drive child requires drive and stops when it reaches the marker or is canceled.</p>
+<div class="examples"><figure><figcaption>v3 coroutine</figcaption><pre tabindex="0"><code>Command driveToPickupWithLights(Drive drive, StatusLights lights) {
+  return Command.noRequirements(
+          coroutine -&gt; {
+            coroutine.fork(lights.showMoving());
+            coroutine.await(drive.moveToPickupMarker());
+          })
+      .named(&quot;Drive to pickup with moving lights&quot;);
+}</code></pre></figure></div>
+<ol><li>The parent calls <code>fork</code> to start the lights child. It continues to the next line without waiting for that child to finish.</li><li>The parent awaits the drive child. The scheduler can run both children. Drive and lights each have their own requirement.</li><li>When the drive child finishes, the parent returns. The scheduler cancels the still-running lights child, which restores the normal pattern.</li></ol>
+<p>Canceling the parent during the drive cancels both children. In Alpha 8, a competing command outside this routine that interrupts an active child can cancel the whole routine. The parent also cancels by default if a child cannot start.</p>
+<table><thead><tr><th scope="col">Call</th><th scope="col">When the parent continues</th></tr></thead><tbody><tr><th scope="row"><code>fork(child)</code></th><td>After starting the child, without waiting for it to finish.</td></tr><tr><th scope="row"><code>await(child)</code></th><td>After the child finishes.</td></tr><tr><th scope="row"><code>awaitAll(a, b)</code></th><td>After both children finish.</td></tr><tr><th scope="row"><code>awaitAny(a, b)</code></th><td>After one finishes and any still-running children are canceled.</td></tr></tbody></table>
+<div class="highlight highlight-docs"><p class="highlight-label">WPILib docs</p><ul><li><a href="https://docs.wpilib.org/en/latest/docs/software/commandbased/commands-v3/creating-commands.html#concurrent-execution-forking" class="wpilib-link" target="_blank" rel="noopener">Concurrent Execution (Forking) <span class="external-link-icon" aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a></li></ul></div><nav class="lesson-actions" aria-label="Continue learning"><a href="intake.html"><span>Previous lesson</span><strong>Translate an intake command</strong></a><a href="examples.html"><span>Apply what you learned</span><strong>Browse worked examples</strong></a></nav></article></div></main><footer><div class="frame">FRC Java · WPILib 2027 Alpha 8</div></footer></body></html>

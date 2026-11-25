@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="A Commands v3 field guide with worked Java examples for FRC students who know Commands v2."><title>Triggers, scheduling, and advanced commands | Commands v3 Field Guide</title><link rel="stylesheet" href="style.css"></head><body><a class="skip" href="#main">Skip to content</a><header><div class="frame"><a class="brand" href="index.html">Commands v3 <span>Field Guide</span></a><nav class="site-nav" aria-label="Guide"><a href="coroutines.html">Learn</a><a href="changes.html">Migration</a><a href="examples.html" aria-current="location">Examples</a><a href="reference.html">v2 lookup</a><a href="v3-reference.html">v3 lookup</a></nav></div></header><main class="frame examples-frame" id="main" tabindex="-1"><div class="hero"><p class="section"><a href="examples.html">All examples</a></p><h1>Triggers, scheduling, and advanced commands</h1><p class="intro">Combine operator inputs, inspect how a command runs, or build a state machine or SysId routine.</p></div><div class="reading-layout example-reading-layout"><nav class="contents" aria-labelledby="contents-title"><div id="contents-title">On this page</div><ul><li><a href="#bind-buttons-and-sensors">Bind buttons and sensors</a></li><li><a href="#schedule-and-inspect-a-command">Schedule and inspect a command</a></li><li><a href="#switch-between-collection-and-ready">Switch between collection and ready</a></li><li><a href="#build-sysid-test-commands">Build SysId test commands</a></li></ul></nav><article class="examples-advanced"><p>Use the trigger example to check the input that requests a command. Use the scheduler trace to see whether the request was queued, started, or canceled. Those are separate events, and the difference is useful when an input looks right but the mechanism never moves.</p>
+<h2 id="bind-buttons-and-sensors">Bind buttons and sensors</h2>
+<p>Configure these bindings once during setup for the intended mode. The arguments are commands built by your robot code. <code>hasPiece</code> and <code>enableOverride</code> are suppliers that read the current sensor and switch. <code>CommandGamepad</code> and <code>CommandGenericHID</code> come from <code>org.wpilib.command3.button</code>. Import <code>Seconds</code> as a static member of <code>org.wpilib.units.Units</code>.</p>
+<p>At the call site, pass a supplier as a lambda such as <code>() -&gt; intake.hasGamePiece()</code> or the equivalent method reference <code>intake::hasGamePiece</code>. The trigger’s event loop calls it to read the sensor on each poll.</p>
+<div class="highlight highlight-warning"><p class="highlight-label">Watch for</p><p>In Alpha 8, an <code>onFalse</code> binding can schedule its command on the first poll if the button starts low. Make the release action safe to run before any press.</p></div>
+<div class="examples"><figure><figcaption>Commands v3 · Bind and read operator controls</figcaption><pre tabindex="0"><code>void bindControls(
+    BooleanSupplier hasPiece, BooleanSupplier enableOverride,
+    Command collect, Command markPiece, Command releaseAction) {
+  var gamepad = new CommandGamepad(0);
+  var panel = CommandGenericHID.getCommandGenericHID(1);
+
+  gamepad.faceDown().and(enableOverride).whileTrue(collect);
+  new Trigger(hasPiece).debounce(Seconds.of(0.05)).onTrue(markPiece);
+  panel.button(2).onFalse(releaseAction);
+  panel.button(3).multiPress(2, Seconds.of(0.4)).onTrue(markPiece);
+}</code></pre></figure></div>
+<p>The main face button runs collection while both the button and the override are active. The debounced sensor schedules <code>markPiece</code> once when its signal rises. Use <code>gamepad.getLeftY()</code> or <code>panel.getRawAxis(0)</code> for a numeric input, such as an axis value read inside a drive default.</p>
+<p>In a test using the default scheduler, a software input can stand in for hardware. Create <code>var button = new InternalButton()</code>, bind <code>button.onTrue(markPiece)</code>, then call <code>button.setPressed(true)</code> and run a scheduler cycle. Calling <code>button.setPressed(false)</code> and running another cycle lets the trigger observe release.</p>
+<div class="highlight highlight-docs"><p class="highlight-label">WPILib docs</p><ul><li><a href="https://docs.wpilib.org/en/latest/docs/software/commandbased/commands-v3/triggers.html#combining-triggers" class="wpilib-link" target="_blank" rel="noopener">Combining Triggers <span class="external-link-icon" aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a></li><li><a href="https://docs.wpilib.org/en/latest/docs/software/commandbased/commands-v3/triggers.html#modifying-trigger-behavior" class="wpilib-link" target="_blank" rel="noopener">Modifying Trigger Behavior <span class="external-link-icon" aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a></li></ul></div>
+<h2 id="schedule-and-inspect-a-command">Schedule and inspect a command</h2>
+<p>Use this pattern in a desktop test after initializing WPILib simulation. The independent scheduler lets you advance commands one cycle at a time. Use the default scheduler in normal robot setup.</p>
+<div class="examples"><figure><figcaption>Commands v3 · Observe a scheduled command</figcaption><pre tabindex="0"><code>void traceScheduler() {
+  Scheduler scheduler = Scheduler.createIndependentScheduler();
+  scheduler.addPeriodic(() -&gt; System.out.println(&quot;Scheduler cycle&quot;));
+  scheduler.addEventListener(event -&gt; {
+    if (event instanceof SchedulerEvent.Interrupted interrupted) {
+      System.out.println(interrupted.interrupter().name());
+    }
+  });
+
+  Command trace = Command.noRequirements(coroutine -&gt; coroutine.yield())
+      .whenExited(() -&gt; System.out.println(&quot;Trace exited&quot;))
+      .named(&quot;Scheduler trace&quot;);
+  if (!scheduler.isSchedulable(trace).successful()) {
+    return;
+  }
+  var result = scheduler.schedule(trace);
+  if (result instanceof Scheduler.ScheduleResult.Successful scheduled) {
+    System.out.println(scheduled.runId());
+    System.out.println(scheduler.isScheduled(trace));
+    scheduler.run();
+    System.out.println(scheduler.isRunning(trace));
+    System.out.println(scheduler.lastRuntimeMs());
+    scheduler.cancel(trace);
+  }
+}</code></pre></figure></div>
+<p>The command has no mechanisms and yields on its first run. The first scheduler cycle leaves it paused and active. <code>cancel(trace)</code> ends it and runs its exit action without resuming the body. The listener observes interruptions by a competing command. It is separate from the explicit cancellation in this example.</p>
+<div class="highlight highlight-idea"><p class="highlight-label">Key idea</p><p>A scheduled command is still in the queue. A running command has started and is still active, including while its coroutine is paused at <code>yield()</code>.</p></div>
+<div class="highlight highlight-docs"><p class="highlight-label">WPILib docs</p><ul><li><a href="https://docs.wpilib.org/en/latest/docs/software/commandbased/commands-v3/making-commands-run.html#manually-running-a-command" class="wpilib-link" target="_blank" rel="noopener">Manually Running a Command <span class="external-link-icon" aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a></li><li><a href="https://docs.wpilib.org/en/latest/docs/software/commandbased/commands-v3/how-it-works.html#scheduler-phases" class="wpilib-link" target="_blank" rel="noopener">Scheduler Phases <span class="external-link-icon" aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a></li></ul></div>
+<h2 id="switch-between-collection-and-ready">Switch between collection and ready</h2>
+<p>Put this factory in your shared-actions class. Pass in the <a href="examples-sensor-waits.html#collect-a-game-piece-with-a-time-limit">timed collection command</a> and a sensor supplier. The machine takes the ready branch only if the collection command finishes with a piece present. An operator abort can exit either state.</p>
+<div class="examples"><figure><figcaption>Commands v3 · Compose a state machine</figcaption><pre tabindex="0"><code>Command collectThenSignalReady(
+    Command collectWithTimeLimit, BooleanSupplier hasPiece, BooleanSupplier abort) {
+  var machine = new StateMachine(&quot;Collect and signal ready&quot;);
+  var collecting = machine.addState(collectWithTimeLimit);
+  var ready = machine.addState(Command.noRequirements(coroutine -&gt; coroutine.park())
+      .named(&quot;Wait in ready state&quot;));
+  ready.onEnter(() -&gt; System.out.println(&quot;Ready&quot;));
+  ready.onExit(() -&gt; System.out.println(&quot;Leaving ready&quot;));
+
+  collecting.switchTo(ready).whenCompleteAnd(hasPiece);
+  collecting.exitStateMachine().whenComplete();
+  machine.switchFromAny().toExitStateMachine().when(abort);
+  machine.setInitialState(collecting);
+  return machine;
+}</code></pre></figure></div>
+<p>At collection completion, <code>whenCompleteAnd(hasPiece)</code> gets first chance to choose the ready state. If the condition is false, <code>whenComplete()</code> exits the machine. The global abort rule is added after all the states. The state callbacks report readiness, and the intake command’s own <code>whenExited</code> stops the roller.</p>
+<p>When collection succeeds, the intake command has already exited and released the intake. The ready command parks with no requirements, so the machine can wait for the abort input without reserving the intake.</p>
+<div class="highlight highlight-docs"><p class="highlight-label">WPILib docs</p><ul><li><a href="https://docs.wpilib.org/en/latest/docs/software/commandbased/commands-v3/state-machines.html#transitions" class="wpilib-link" target="_blank" rel="noopener">State Machine Transitions <span class="external-link-icon" aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a></li></ul></div>
+<h2 id="build-sysid-test-commands">Build SysId test commands</h2>
+<p>In your mechanism class, provide <code>setVoltage(Voltage)</code> to apply the test output and <code>logSysId(SysIdRoutineLog)</code> to record the mechanism’s measurements. Import <code>SysIdRoutine</code> from <code>org.wpilib.command3.sysid</code>.</p>
+<div class="examples"><figure><figcaption>Commands v3 · Configure a SysId routine</figcaption><pre tabindex="0"><code>SysIdRoutine createSysIdRoutine() {
+  return new SysIdRoutine(
+      SysIdRoutine.Config.defaults(),
+      new SysIdRoutine.SysIdMechanism(this::setVoltage, this::logSysId, this));
+}</code></pre></figure></div>
+<p>Call <code>routine.quasistatic(SysIdRoutine.Direction.FORWARD)</code> or pass <code>REVERSE</code> for the voltage ramp in the opposite direction. Use <code>routine.dynamic(...)</code> in both directions for the step-voltage tests. Each call builds a command that reserves the mechanism supplied to the routine. Use <code>SysIdRoutine.Config.useDataLog(rampRate, stepVoltage, timeout)</code> to customize the test values while retaining the standard state logging.</p>
+<div class="highlight highlight-docs"><p class="highlight-label">WPILib docs</p><ul><li><a href="https://docs.wpilib.org/en/latest/docs/software/advanced-controls/system-identification/creating-routine.html" class="wpilib-link" target="_blank" rel="noopener">Creating an Identification Routine <span class="external-link-icon" aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a></li></ul></div><p class="example-back"><a href="examples.html">Browse all examples</a></p></article></div></main><footer><div class="frame">FRC Java · WPILib 2027 Alpha 8</div></footer></body></html>

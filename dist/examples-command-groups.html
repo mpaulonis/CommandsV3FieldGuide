@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="A Commands v3 field guide with worked Java examples for FRC students who know Commands v2."><title>Command groups and mechanism requirements | Commands v3 Field Guide</title><link rel="stylesheet" href="style.css"></head><body><a class="skip" href="#main">Skip to content</a><header><div class="frame"><a class="brand" href="index.html">Commands v3 <span>Field Guide</span></a><nav class="site-nav" aria-label="Guide"><a href="coroutines.html">Learn</a><a href="changes.html">Migration</a><a href="examples.html" aria-current="location">Examples</a><a href="reference.html">v2 lookup</a><a href="v3-reference.html">v3 lookup</a></nav></div></header><main class="frame examples-frame" id="main" tabindex="-1"><div class="hero"><p class="section"><a href="examples.html">All examples</a></p><h1>Command groups and mechanism requirements</h1><p class="intro">Decide when an autonomous group should finish and how long each mechanism should stay reserved.</p></div><div class="reading-layout example-reading-layout"><nav class="contents" aria-labelledby="contents-title"><div id="contents-title">On this page</div><ul><li><a href="#keep-the-drivetrain-stopped-during-an-autonomous-pause">Keep the drivetrain stopped during an autonomous pause</a></li><li><a href="#build-a-command-from-the-robot-s-current-state">Build a command from the robot’s current state</a></li><li><a href="#give-a-child-its-mechanism-only-while-it-runs">Give a child its mechanism only while it runs</a></li><li><a href="#build-a-child-later-and-reserve-its-mechanism-only-then">Build a child later and reserve its mechanism only then</a></li></ul></nav><article class="examples-command-groups"><p>When you read a routine, trace when each child starts and what ends the stage. Then trace which mechanisms another command can take at that point. The timed group below ends when the timer finishes. During the wait, the group reserves the drivetrain because its hold command requires drive.</p>
+<p>Lesson 3 shows how to <a href="ownership.html#prepare-two-independent-mechanisms-together">run two actions and wait for both</a>, <a href="ownership.html#use-a-group-inside-a-coroutine">use a preparation group in a conditional routine</a>, and <a href="ownership.html#start-a-child-and-keep-going-with-fork">keep lights running while a drive command runs</a>.</p>
+<h2 id="keep-the-drivetrain-stopped-during-an-autonomous-pause">Keep the drivetrain stopped during an autonomous pause</h2>
+<p><strong>Problem.</strong> Let the drivetrain settle for one second before the next autonomous step. Keep drive under control for the whole pause.</p>
+<p><strong>Where this goes.</strong> Put the method on your drive class, which implements <code>Mechanism</code>. Its <code>stop()</code> method requests zero motion from the drivetrain. Import <code>ParallelGroupBuilder</code> from <code>org.wpilib.command3</code> and <code>Seconds</code> from <code>org.wpilib.units.Units</code>.</p>
+<div class="examples"><figure><figcaption>Commands v3</figcaption><pre tabindex="0"><code>Command pauseWithDriveStopped() {
+  Command timer = Command.waitFor(Seconds.of(1.0)).named(&quot;Pause timer&quot;);
+  Command holdDrive =
+      this.runRepeatedly(this::stop)
+          .whenExited(this::stop)
+          .named(&quot;Hold drive stopped&quot;);
+
+  return new ParallelGroupBuilder()
+      .requiring(timer)
+      .optional(holdDrive)
+      .named(&quot;Pause with drive stopped&quot;);
+}</code></pre></figure></div>
+<p>This is the same completion rule as a v2 <code>Commands.deadline(timer, holdDrive)</code>. The timer determines when the group finishes. The group keeps control of the drivetrain because the hold command requires it. Here <code>requiring(timer)</code> means <strong>the timer must finish</strong>. The timer itself requires no mechanism. When time is up, the group cancels the hold command, which requests a stop once more. Canceling the group early also cancels the hold.</p>
+<p>If you put only a timer between two commands, check what controls the drivetrain during the wait. With a fixed sequence, the sequence keeps its combined requirements throughout. A coordinating coroutine can instead let each child acquire and release its own requirements.</p>
+<h2 id="build-a-command-from-the-robot-s-current-state">Build a command from the robot’s current state</h2>
+<p><strong>Problem.</strong> The driver presses a button to approach a target just ahead of the robot’s current position. Read the starting pose on every press, even if the binding was created at startup.</p>
+<p><strong>Where this goes.</strong> <code>Drive.approachFromHere()</code> reads the current pose when called, calculates a nearby target, and returns a fresh command that requires drive. That command moves the robot when scheduled and stops drive when it ends. In v2, <code>Drive</code> is a subsystem and <code>Set</code> comes from <code>java.util</code>. In v3, <code>Drive</code> implements <code>Mechanism</code>.</p>
+<div class="examples"><figure><figcaption>Commands v2</figcaption><pre tabindex="0"><code>Command approachWhenPressed(Drive drive) {
+  return Commands.defer(drive::approachFromHere, Set.of(drive))
+      .withName(&quot;Approach from current pose&quot;);
+}</code></pre></figure><figure><figcaption>Commands v3</figcaption><pre tabindex="0"><code>Command approachWhenPressed(Drive drive) {
+  return Command.requiring(drive)
+      .executing(coroutine -&gt; {
+        coroutine.await(drive.approachFromHere());
+      })
+      .named(&quot;Approach from current pose&quot;);
+}</code></pre></figure></div>
+<p>In v2, <code>defer</code> gives <code>DeferredCommand</code> a supplier. The supplier runs when the wrapper starts, and <code>Set.of(drive)</code> declares the requirement up front. In v3, the call inside the coroutine runs when the scheduler reaches that line. The parent explicitly requires drive to preserve the v2 reservation. The child can share that requirement because the scheduler knows it belongs to the parent.</p>
+<div class="highlight highlight-warning"><p class="highlight-label">Watch for</p><p>Keep <code>drive.approachFromHere()</code> inside the lambda passed to <code>.executing(...)</code> to read the pose each time the parent runs. Calling it before you pass the lambda to the builder would read the pose during setup.</p></div>
+<p>Delaying construction and deciding when to reserve drive are separate choices.</p>
+<h2 id="give-a-child-its-mechanism-only-while-it-runs">Give a child its mechanism only while it runs</h2>
+<p><strong>Problem.</strong> Drive to the pickup marker, then move the elevator to pickup height. Other elevator commands may run during the drive stage. During the elevator move, drive can become available if your robot can safely allow it.</p>
+<div class="examples"><figure><figcaption>Commands v2</figcaption><pre tabindex="0"><code>Command pickupSetup(Drive drive, Elevator elevator) {
+  return Commands.sequence(
+          drive.moveToPickupMarker().asProxy(),
+          elevator.moveToPickupHeight().asProxy())
+      .withName(&quot;Pickup setup&quot;);
+}</code></pre></figure></div>
+<p>The drive command requires drive and finishes at the marker. The elevator command requires the elevator and finishes at pickup height. In v2, <code>asProxy()</code> creates a <code>ProxyCommand</code> that schedules the real command separately. The wrapping sequence does not inherit the real command’s requirements. The factory calls still happen when <code>pickupSetup()</code> builds the sequence.</p>
+<p>In the <a href="ownership.html#move-the-drivetrain-then-position-the-elevator">v3 coroutine version</a>, the parent requires neither mechanism. Each <code>await</code> starts a scheduler-tracked child. The child acquires its requirement and releases it when it ends. The drive requirement becomes free during the elevator move.</p>
+<p><strong>Check what happens if a child cannot start.</strong> A v2 proxy can finish and let the sequence advance if the underlying command never schedules. With the default settings in Alpha 8, an awaited child that cannot start cancels its v3 parent. For example, if a higher-priority homing command controls the elevator, the routine stops at that stage. Canceling the v3 parent also cancels its active child. Use a <a href="ownership.html#move-the-drivetrain-then-position-the-elevator">sequence that reserves both mechanisms</a> if the routine needs to keep drive throughout.</p>
+<h2 id="build-a-child-later-and-reserve-its-mechanism-only-then">Build a child later and reserve its mechanism only then</h2>
+<p>In v2, <code>Commands.deferredProxy(drive::approachFromHere)</code> combines both choices. The supplier runs when that stage is reached, and the real command’s drive requirement stays out of the enclosing group. In v3, call the factory inside the <code>await</code> of a parent with no requirements. Here the approach is built from the pose after the elevator reaches pickup height, and drive becomes required at that stage.</p>
+<div class="examples"><figure><figcaption>Commands v2</figcaption><pre tabindex="0"><code>Command lowerThenApproach(Drive drive, Elevator elevator) {
+  return Commands.sequence(
+          elevator.moveToPickupHeight().asProxy(),
+          Commands.deferredProxy(drive::approachFromHere))
+      .withName(&quot;Lower elevator then approach&quot;);
+}</code></pre></figure><figure><figcaption>Commands v3</figcaption><pre tabindex="0"><code>Command lowerThenApproach(Drive drive, Elevator elevator) {
+  return Command.noRequirements(
+          coroutine -&gt; {
+            coroutine.await(elevator.moveToPickupHeight());
+            coroutine.await(drive.approachFromHere());
+          })
+      .named(&quot;Lower elevator then approach&quot;);
+}</code></pre></figure></div>
+<p>This routine and the <a href="#build-a-command-from-the-robot-s-current-state">current-pose example</a> both read the pose when the approach command is built. Here the parent has no requirements, so other commands can use drive while the elevator lowers. At the approach step the child must acquire drive, so a higher-priority drive command can prevent it from starting.</p>
+<div class="highlight highlight-docs"><p class="highlight-label">WPILib docs</p><ul><li><a href="https://docs.wpilib.org/en/stable/docs/software/commandbased/command-compositions.html#scheduling-other-commands" class="wpilib-link" target="_blank" rel="noopener">Scheduling Other Commands in v2 <span class="external-link-icon" aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a></li><li><a href="https://docs.wpilib.org/en/latest/docs/software/commandbased/commands-v3/migration-guide.html#proxy-commands-and-smart-requirements" class="wpilib-link" target="_blank" rel="noopener">Proxy Commands and Smart Requirements <span class="external-link-icon" aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a></li></ul></div><p class="example-back"><a href="examples.html">Browse all examples</a></p></article></div></main><footer><div class="frame">FRC Java · WPILib 2027 Alpha 8</div></footer></body></html>
